@@ -1,4 +1,4 @@
-import { createElement } from "../../lib/skeleton/index.js";
+import { createElement, onDestroy } from "../../lib/skeleton/index.js";
 import rxjs, { effect } from "../../lib/rx.js";
 import { animate, slideYIn } from "../../lib/animate.js";
 import { loadCSS, loadJS } from "../../helpers/loader.js";
@@ -10,7 +10,7 @@ import Hls from "../../lib/vendor/hlsjs/hls.js";
 
 import ctrlError from "../ctrl_error.js";
 
-import { transition, getFilename, getDownloadUrl } from "./common.js";
+import { transition } from "./common.js";
 import { formatTimecode } from "./common_player.js";
 import { ICON } from "./common_icon.js";
 import { renderMenubar, buttonDownload, buttonFullscreen } from "./component_menubar.js";
@@ -21,14 +21,14 @@ const STATUS_PLAYING = "PLAYING";
 const STATUS_PAUSED = "PAUSED";
 const STATUS_BUFFERING = "BUFFERING";
 
-export default function(render, { mime }) {
+export default function(render, { mime, getFilename, getDownloadUrl }) {
     const $page = createElement(`
         <div class="component_videoplayer">
-            <component-menubar></component-menubar>
+            <component-menubar filename="${getFilename()}"></component-menubar>
             <div class="video_container">
                 <span>
                     <div class="video_screen video-state-pause is-casting-no">
-                        <div class="video_wrapper" style="max-height: 819px;">
+                        <div class="video_wrapper">
                             <video></video>
                         </div>
                         <div class="loader no-select">
@@ -156,7 +156,11 @@ export default function(render, { mime }) {
     // feature1: setup the dom
     const setup$ = rxjs.of(null).pipe(
         rxjs.map(() => {
-            const hls = new Hls();
+            const loadPolicy = { default: { maxLoadTimeMs: 3600000, maxTimeToFirstByteMs: Infinity, timeoutRetry: { maxNumRetry: 0 } } };
+            const hls = new Hls({
+                debug: !!new URLSearchParams(location.search).get("debug"),
+                manifestLoadPolicy: loadPolicy,
+            });
             const sources = window.overrides["video-map-sources"]([{
                 src: getDownloadUrl(),
                 type: mime,
@@ -172,6 +176,10 @@ export default function(render, { mime }) {
                 hls.loadSource(sources[i].src);
             }
             hls.attachMedia($video);
+            onDestroy(() => {
+                $video.pause();
+                $video.remove();
+            });
             return sources;
         }),
         rxjs.mergeMap((sources) => rxjs.merge(
@@ -182,7 +190,7 @@ export default function(render, { mime }) {
         )),
         rxjs.mergeMap(() => {
             const $loader = qs($page, ".loader");
-            $loader.replaceChildren(createElement(`<img style="height:170px;cursor:pointer;filter:brightness(0.5) invert(1);" src="${ICON.PLAY}" />`));
+            $loader.replaceChildren(createElement(`<img src="${ICON.PLAY}" />`));
             animate($loader, {
                 time: 150,
                 keyframes: [

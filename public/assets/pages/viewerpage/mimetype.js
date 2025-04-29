@@ -1,3 +1,5 @@
+import { get as getPlugin } from "../../model/plugin.js";
+
 export function opener(file = "", mimes) {
     const mime = getMimeType(file, mimes);
     const type = mime.split("/")[0];
@@ -9,12 +11,16 @@ export function opener(file = "", mimes) {
         }
     }
 
+    const p = getPlugin(mime);
+    if (p) return [
+        p[0],
+        { mime, loader: p[1] },
+    ];
+
     if (type === "text") {
         return ["editor", { mime }];
     } else if (mime === "application/pdf") {
         return ["pdf", { mime }];
-    } else if (mime === "image/svg+xml") {
-        return ["editor", { mime }];
     } else if (type === "image") {
         return ["image", { mime }];
     } else if (["application/javascript", "application/xml", "application/json",
@@ -24,20 +30,20 @@ export function opener(file = "", mimes) {
         return ["audio", { mime }];
     } else if (mime === "application/x-form") {
         return ["form", { mime }];
-    } else if (mime === "application/geo+json" || mime === "application/vnd.ogc.wms_xml") {
+    } else if (mime === "application/geo+json" || mime === "application/vnd.ogc.wms_xml" || mime === "application/vnd.shp") {
         return ["map", { mime }];
     } else if (type === "video" || mime === "application/ogg") {
         return ["video", { mime }];
     } else if (["application/epub+zip"].indexOf(mime) !== -1) {
         return ["ebook", { mime }];
-    } else if (type === "model" || ["application/object", "application/fbx"].indexOf(mime) !== -1) {
-        return ["3d", { mime }];
-    } else if (type === "application") {
+    } else if (mime === "application/x-url") {
+        return ["url", { mime }];
+    } else if (type === "application" && mime !== "application/text") {
         return ["download", { mime }];
     }
     return ["editor", { mime }];
 }
 
 function getMimeType(file, mimes = {}) {
-    return mimes[file.split(".").slice(-1)[0]] || "text/plain";
+    return mimes[file.split(".").slice(-1)[0].toLowerCase()] || "text/plain";
 }

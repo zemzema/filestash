@@ -1,5 +1,6 @@
-export async function init() {
-    if (!window.CONFIG["enable_chromecast"]) {
+export function init(config) {
+    if (navigator.onLine === false) return Promise.resolve();
+    if (!config["enable_chromecast"]) {
         return Promise.resolve();
     } else if (!("chrome" in window)) {
         return Promise.resolve();

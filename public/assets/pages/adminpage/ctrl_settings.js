@@ -4,7 +4,7 @@ import { qs, qsa } from "../../lib/dom.js";
 import { createForm, mutateForm } from "../../lib/form.js";
 import { formTmpl } from "../../components/form.js";
 import { generateSkeleton } from "../../components/skeleton.js";
-import { get as getConfig } from "../../model/config.js";
+import { query as getConfig } from "../../model/config.js";
 import ctrlError from "../ctrl_error.js";
 
 import { get as getAdminConfig, save as saveConfig, initConfig } from "./model_config.js";
@@ -47,7 +47,7 @@ export default AdminHOC(async function(render) {
     const init$ = config$.pipe(
         rxjs.mergeMap((formSpec) => createForm(formSpec, tmpl)),
         rxjs.map(($form) => [$form]),
-        applyMutation(qs($container, "[data-bind=\"form\"]"), "replaceChildren"),
+        applyMutation(qs($container, `[data-bind="form"]`), "replaceChildren"),
         rxjs.share(),
     );
     effect(init$);

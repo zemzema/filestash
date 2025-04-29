@@ -9,9 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/ec2metadata"
+	"github.com/aws/aws-sdk-go/aws/defaults"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -58,18 +57,18 @@ func (this S3Backend) Init(params map[string]string, app *App) (IBackend, error)
 		}})
 	}
 	if params["role_arn"] != "" {
-		sessOptions := session.Options{Config: aws.Config{Region: aws.String(params["region"])}}
 		creds = append(creds, &stscreds.AssumeRoleProvider{
-			Client:   sts.New(session.Must(session.NewSessionWithOptions(sessOptions))),
+			Client:   sts.New(session.Must(session.NewSessionWithOptions(session.Options{Config: aws.Config{Region: aws.String(params["region"])}}))),
 			RoleARN:  params["role_arn"],
 			Duration: stscreds.DefaultDuration,
 		})
 	}
 	creds = append(
 		creds,
-		&ec2rolecreds.EC2RoleProvider{Client: ec2metadata.New(session.Must(session.NewSession()))},
 		&credentials.EnvProvider{},
+		defaults.RemoteCredProvider(*defaults.Config(), defaults.Handlers()),
 	)
+
 	config := &aws.Config{
 		Credentials:                   credentials.NewChainCredentials(creds),
 		CredentialsChainVerboseErrors: aws.Bool(true),
@@ -211,11 +210,15 @@ func (this S3Backend) Ls(path string) (files []os.FileInfo, err error) {
 				if i == 0 && *object.Key == p.path {
 					continue
 				}
+				var size int64 = -1
+				if object.Size != nil {
+					size = *object.Size
+				}
 				files = append(files, &File{
 					FName: filepath.Base(*object.Key),
 					FType: "file",
 					FTime: object.LastModified.Unix(),
-					FSize: *object.Size,
+					FSize: size,
 				})
 			}
 			for _, object := range objs.CommonPrefixes {
@@ -242,7 +245,7 @@ func (this S3Backend) Cat(path string) (io.ReadCloser, error) {
 		input.SSECustomerAlgorithm = aws.String("AES256")
 		input.SSECustomerKey = aws.String(this.params["encryption_key"])
 	}
-	obj, err := client.GetObject(input)
+	obj, err := client.GetObjectWithContext(this.Context, input)
 	if err != nil {
 		awsErr, ok := err.(awserr.Error)
 		if ok == false {

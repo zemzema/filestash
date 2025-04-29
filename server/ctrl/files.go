@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/mickael-kerjean/filestash/server/common"
@@ -66,6 +67,7 @@ func init() {
 		zip_timeout()
 		disable_csp()
 	})
+	initChunkedUploader()
 }
 
 func FileLs(ctx *App, res http.ResponseWriter, req *http.Request) {
@@ -211,7 +213,7 @@ func FileCat(ctx *App, res http.ResponseWriter, req *http.Request) {
 
 	// use our cache if necessary (range request) when possible
 	if req.Header.Get("range") != "" {
-		ctx.Session["_path"] = path
+		ctx.Session["fullpath"] = path
 		if p := file_cache.Get(ctx.Session); p != nil {
 			f, err := os.OpenFile(p.(string), os.O_RDONLY, os.ModePerm)
 			if err == nil {
@@ -248,7 +250,9 @@ func FileCat(ctx *App, res http.ResponseWriter, req *http.Request) {
 			}
 			file, err = plgHandler.Generate(file, ctx, &res, req)
 			if err != nil {
-				Log.Debug("cat::thumbnailer '%s'", err.Error())
+				if req.Context().Err() == nil {
+					Log.Debug("cat::thumbnailer '%s'", err.Error())
+				}
 				SendErrorResult(res, err)
 				return
 			}
@@ -282,6 +286,7 @@ func FileCat(ctx *App, res http.ResponseWriter, req *http.Request) {
 				SendErrorResult(res, err)
 				return
 			}
+			file_cache.Set(ctx.Session, tmpPath)
 			if _, err = io.Copy(f, file); err != nil {
 				f.Close()
 				file.Close()
@@ -289,14 +294,20 @@ func FileCat(ctx *App, res http.ResponseWriter, req *http.Request) {
 				SendErrorResult(res, err)
 				return
 			}
-			f.Close()
-			file.Close()
-			if f, err = os.OpenFile(tmpPath, os.O_RDONLY, os.ModePerm); err != nil {
+			if err = f.Sync(); err != nil {
+				f.Close()
+				file.Close()
 				Log.Debug("cat::range2 '%s'", err.Error())
 				SendErrorResult(res, err)
 				return
 			}
-			file_cache.Set(ctx.Session, tmpPath)
+			f.Close()
+			file.Close()
+			if f, err = os.OpenFile(tmpPath, os.O_RDONLY, os.ModePerm); err != nil {
+				Log.Debug("cat::range3 '%s'", err.Error())
+				SendErrorResult(res, err)
+				return
+			}
 			if fi, err := f.Stat(); err == nil {
 				contentLength = fi.Size()
 			}
@@ -395,17 +406,24 @@ func FileAccess(ctx *App, res http.ResponseWriter, req *http.Request) {
 	SendSuccessResult(res, nil)
 }
 
+var chunkedUploadCache AppCache
+
 func FileSave(ctx *App, res http.ResponseWriter, req *http.Request) {
+	h := res.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Pragma", "no-cache")
+	h.Set("Connection", "Close")
+
 	path, err := PathBuilder(ctx, req.URL.Query().Get("path"))
 	if err != nil {
-		Log.Debug("save::path '%s'", err.Error())
+		Log.Debug("files::save action=path_builder err=%s", err.Error())
 		SendErrorResult(res, err)
 		return
 	}
 
 	if model.CanEdit(ctx) == false {
 		if model.CanUpload(ctx) == false {
-			Log.Debug("save::permission 'permission denied'")
+			Log.Debug("files::save action=permission_upload err=permission_denied")
 			SendErrorResult(res, ErrPermissionDenied)
 			return
 		}
@@ -414,13 +432,13 @@ func FileSave(ctx *App, res http.ResponseWriter, req *http.Request) {
 		root, filename := SplitPath(path)
 		entries, err := ctx.Backend.Ls(root)
 		if err != nil {
-			Log.Debug("ls::permission 'permission denied'")
+			Log.Debug("files::save action=permission_ls err=%s", err.Error())
 			SendErrorResult(res, ErrPermissionDenied)
 			return
 		}
 		for i := 0; i < len(entries); i++ {
 			if entries[i].Name() == filename {
-				Log.Debug("ls::permission 'conflict'")
+				Log.Debug("files::save action=permission_ls err=already_exist")
 				SendErrorResult(res, ErrConflict)
 				return
 			}
@@ -429,20 +447,167 @@ func FileSave(ctx *App, res http.ResponseWriter, req *http.Request) {
 
 	for _, auth := range Hooks.Get.AuthorisationMiddleware() {
 		if err = auth.Save(ctx, path); err != nil {
-			Log.Info("save::auth '%s'", err.Error())
+			Log.Info("files::save action=middleware err=%s", err.Error())
 			SendErrorResult(res, ErrNotAuthorized)
 			return
 		}
 	}
 
-	err = ctx.Backend.Save(path, req.Body)
-	req.Body.Close()
-	if err != nil {
-		Log.Debug("save::backend '%s'", err.Error())
-		SendErrorResult(res, NewError(err.Error(), 403))
+	// There is 2 ways to save something:
+	// - case1: regular upload, we just insert the file in the pipe
+	proto := req.URL.Query().Get("proto")
+	if proto == "" && req.Method == http.MethodPost {
+		err = ctx.Backend.Save(path, req.Body)
+		req.Body.Close()
+		if err != nil {
+			Log.Debug("files::save action=backend_save err=%s", err.Error())
+			SendErrorResult(res, NewError(err.Error(), 403))
+			return
+		}
+		SendSuccessResult(res, nil)
 		return
 	}
-	SendSuccessResult(res, nil)
+
+	// - case2: chunked upload which implements the TUS protocol:
+	//   https://www.ietf.org/archive/id/draft-tus-httpbis-resumable-uploads-protocol-00.html
+	cacheKey := map[string]string{
+		"path":    path,
+		"session": GenerateID(ctx.Session),
+	}
+	if proto == "tus" && req.Method == http.MethodPost {
+		if c := chunkedUploadCache.Get(cacheKey); c != nil {
+			chunkedUploadCache.Del(cacheKey)
+		}
+		size, err := strconv.ParseUint(req.Header.Get("Upload-Length"), 10, 0)
+		if err != nil {
+			SendErrorResult(res, ErrNotValid)
+			return
+		}
+		uploader := createChunkedUploader(ctx.Backend.Save, path, size)
+		chunkedUploadCache.Set(cacheKey, uploader)
+		h.Set("Content-Length", "0")
+		h.Set("Location", req.URL.String())
+		res.WriteHeader(http.StatusCreated)
+		return
+	}
+	if proto == "tus" && req.Method == http.MethodHead {
+		c := chunkedUploadCache.Get(cacheKey)
+		if c == nil {
+			SendErrorResult(res, ErrNotFound)
+			return
+		}
+		offset, length := c.(*chunkedUpload).Meta()
+		h.Set("Upload-Offset", fmt.Sprintf("%d", offset))
+		h.Set("Upload-Length", fmt.Sprintf("%d", length))
+		res.WriteHeader(http.StatusOK)
+		return
+	}
+	if proto == "tus" && req.Method == http.MethodPatch {
+		requestOffset, err := strconv.ParseUint(req.Header.Get("Upload-Offset"), 10, 0)
+		if err != nil {
+			SendErrorResult(res, ErrNotValid)
+			return
+		}
+		c := chunkedUploadCache.Get(cacheKey)
+		if c == nil {
+			SendErrorResult(res, ErrNotFound)
+			return
+		}
+		uploader := c.(*chunkedUpload)
+		initialOffset, totalSize := uploader.Meta()
+		if initialOffset != requestOffset {
+			Log.Debug("files::save::tus action=uploader.next path=%s err=offset_missmatch", path)
+			SendErrorResult(res, ErrNotValid)
+			return
+		} else if err := uploader.Next(req.Body); err != nil {
+			Log.Debug("files::save::tus action=uploader.next path=%s err=%s", path, err.Error())
+			SendErrorResult(res, NewError(err.Error(), 403))
+			return
+		}
+		newOffset, _ := uploader.Meta()
+		if newOffset > totalSize {
+			uploader.Close()
+			chunkedUploadCache.Del(cacheKey)
+			Log.Warning("files::save::tus path=%s err=assert_offset size=%d old_offset=%d new_offset=%d", path, totalSize, initialOffset, newOffset)
+			SendErrorResult(res, NewError("aborted - offset larger than total size", 403))
+			return
+		} else if newOffset == totalSize {
+			if err := uploader.Close(); err != nil {
+				Log.Debug("files::save::tus action=uploader.close err=%s", err.Error())
+				SendErrorResult(res, ErrNotValid)
+				return
+			}
+			chunkedUploadCache.Del(cacheKey)
+		}
+		h.Set("Upload-Offset", fmt.Sprintf("%d", newOffset))
+		res.WriteHeader(http.StatusNoContent)
+		return
+	}
+	SendErrorResult(res, ErrNotImplemented)
+}
+
+func createChunkedUploader(save func(path string, file io.Reader) error, path string, size uint64) *chunkedUpload {
+	r, w := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- save(path, r)
+	}()
+	return &chunkedUpload{
+		fn:     save,
+		stream: w,
+		done:   done,
+		offset: 0,
+		size:   size,
+	}
+}
+
+func initChunkedUploader() {
+	chunkedUploadCache = NewAppCache(60*24, 1)
+	chunkedUploadCache.OnEvict(func(key string, value interface{}) {
+		c := value.(*chunkedUpload)
+		if c == nil {
+			Log.Warning("ctrl::files::chunked::cleanup nil on close")
+			return
+		}
+		if err := c.Close(); err != nil {
+			Log.Warning("ctrl::files::chunked::cleanup action=close err=%s", err.Error())
+			return
+		}
+	})
+}
+
+type chunkedUpload struct {
+	fn     func(path string, file io.Reader) error
+	stream *io.PipeWriter
+	offset uint64
+	size   uint64
+	done   chan error
+	once   sync.Once
+	mu     sync.Mutex
+}
+
+func (this *chunkedUpload) Next(body io.ReadCloser) error {
+	n, err := io.Copy(this.stream, body)
+	body.Close()
+	this.mu.Lock()
+	this.offset += uint64(n)
+	this.mu.Unlock()
+	return err
+}
+
+func (this *chunkedUpload) Close() error {
+	this.stream.Close()
+	err := <-this.done
+	this.once.Do(func() {
+		close(this.done)
+	})
+	return err
+}
+
+func (this *chunkedUpload) Meta() (uint64, uint64) {
+	this.mu.Lock()
+	defer this.mu.Unlock()
+	return this.offset, this.size
 }
 
 func FileMv(ctx *App, res http.ResponseWriter, req *http.Request) {

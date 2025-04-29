@@ -1,10 +1,11 @@
 import { createElement, createRender, createFragment, onDestroy } from "../../lib/skeleton/index.js";
 import rxjs, { effect, onClick, preventDefault } from "../../lib/rx.js";
 import { animate, slideXIn, slideYIn } from "../../lib/animate.js";
-import { loadCSS } from "../../helpers/loader.js";
+import { basename, forwardURLParams } from "../../lib/path.js";
 import assert from "../../lib/assert.js";
 import { qs, qsa } from "../../lib/dom.js";
-import { basename } from "../../lib/path.js";
+import { get as getConfig } from "../../model/config.js";
+import { loadCSS } from "../../helpers/loader.js";
 import t from "../../locales/index.js";
 
 import "../../components/dropdown.js";
@@ -12,7 +13,6 @@ import "../../components/icon.js";
 import { createModal } from "../../components/modal.js";
 
 import componentShare from "./modal_share.js";
-import componentEmbed from "./modal_embed.js";
 import componentTag from "./modal_tag.js";
 import componentRename from "./modal_rename.js";
 import componentDelete from "./modal_delete.js";
@@ -52,9 +52,13 @@ export default async function(render) {
     render($page);
     onDestroy(() => clearSelection());
 
+    const getSelectionLength$ = getSelection$().pipe(
+        rxjs.map(() => lengthSelection()), // <- potentially expensive, hence the share
+        rxjs.shareReplay(),
+    );
     const $scroll = assert.type($page.closest(".scroll-y"), HTMLElement);
-    componentLeft(createRender(qs($page, ".action.left")), { $scroll });
-    componentRight(createRender(qs($page, ".action.right")));
+    componentLeft(createRender(qs($page, ".action.left")), { $scroll, getSelectionLength$ });
+    componentRight(createRender(qs($page, ".action.right")), { getSelectionLength$ });
 
     effect(rxjs.fromEvent($scroll, "scroll", { passive: true }).pipe(
         rxjs.map((e) => e.target.scrollTop > 12),
@@ -66,10 +70,9 @@ export default async function(render) {
     ));
 }
 
-function componentLeft(render, { $scroll }) {
-    effect(getSelection$().pipe(
-        rxjs.filter(() => lengthSelection() === 0),
-        rxjs.mergeMap(() => rxjs.merge(rxjs.fromEvent(window, "resize"), rxjs.of(null))),
+function componentLeft(render, { $scroll, getSelectionLength$ }) {
+    effect(getSelectionLength$.pipe(
+        rxjs.filter((l) => l === 0),
         rxjs.mergeMap(() => getPermission()),
         rxjs.map(() => render(createFragment(`
             <button data-action="new-file" title="${t("New File")}"${toggleDependingOnPermission(currentPath(), "new-file")}>
@@ -101,8 +104,8 @@ function componentLeft(render, { $scroll }) {
     ));
     onDestroy(() => setAction(null));
 
-    effect(getSelection$().pipe(
-        rxjs.filter(() => lengthSelection() === 1),
+    effect(getSelectionLength$.pipe(
+        rxjs.filter((l) => l === 1),
         rxjs.map(() => render(createFragment(`
             <a target="_blank" ${generateLinkAttributes(expandSelection())}><button data-action="download" title="${t("Download")}">
                 ${t("Download")}
@@ -113,33 +116,32 @@ function componentLeft(render, { $scroll }) {
             <button data-action="rename" title="${t("Rename")}"${toggleDependingOnPermission(currentPath(), "rename")}>
                 ${t("Rename")}
             </button>
-            <button data-action="share" title="${t("Share")}" class="${(window.CONFIG["enable_share"] && !new URLSearchParams(location.search).has("share")) ? "" : "hidden"}">
+            <button data-action="share" title="${t("Share")}" class="${(getConfig("enable_share") && !new URLSearchParams(location.search).has("share")) ? "" : "hidden"}">
                 ${t("Share")}
             </button>
-            <button data-action="embed" title="${t("Embed")}" class="hidden">
-                ${t("Embed")}
-            </button>
-            <button data-action="tag" title="${t("Tag")}" class="hidden">
+            <button data-action="tag" title="${t("Tag")}" class="${new URLSearchParams(location.search).get("canary") === "true" ? "" : "hidden"}">
                 ${t("Tag")}
             </button>
         `))),
         rxjs.tap(($buttons) => animate($buttons, { time: 100, keyframes: slideYIn(5) })),
         rxjs.switchMap(($page) => rxjs.merge(
-            onClick(qs($page, `[data-action="download"]`)).pipe(
-                rxjs.mergeMap(() => rxjs.EMPTY),
-            ),
+            onClick(qs($page, `[data-action="download"]`), { preventDefault: true }).pipe(rxjs.tap(($button) => {
+                let url = $button.parentElement.getAttribute("href");
+                url += "&name=" + $button.parentElement.getAttribute("download");
+                window.open(url);
+            })),
             onClick(qs($page, `[data-action="share"]`)).pipe(rxjs.tap(() => {
                 componentShare(createModal({
                     withButtonsRight: null,
                     withButtonsLeft: null,
-                    targetHeight: 315,
                 }), { path: expandSelection()[0].path });
             })),
-            onClick(qs($page, `[data-action="embed"]`)).pipe(rxjs.tap(() => {
-                componentEmbed(createModal(modalOpt));
-            })),
             onClick(qs($page, `[data-action="tag"]`)).pipe(rxjs.tap(() => {
-                componentTag(createModal(modalOpt));
+                componentTag(createModal({
+                    ...modalOpt,
+                    withButtonsLeft: null,
+                    withButtonsRight: null,
+                }), { path: expandSelection()[0].path });
             })),
             onClick(qs($page, `[data-action="rename"]`)).pipe(rxjs.mergeMap(() => {
                 const path = expandSelection()[0].path;
@@ -169,8 +171,8 @@ function componentLeft(render, { $scroll }) {
         )),
     ));
 
-    effect(getSelection$().pipe(
-        rxjs.filter(() => lengthSelection() > 1),
+    effect(getSelectionLength$.pipe(
+        rxjs.filter((l) => l > 1),
         rxjs.map(() => render(createFragment(`
             <a target="_blank" ${generateLinkAttributes(expandSelection())}><button data-action="download">
                 ${t("Download")}
@@ -180,6 +182,9 @@ function componentLeft(render, { $scroll }) {
             </button>
         `))),
         rxjs.mergeMap(($page) => rxjs.merge(
+            onClick(qs($page, `[data-action="download"]`), { preventDefault: true }).pipe(rxjs.tap(($button) => {
+                window.open($button.parentElement.getAttribute("href"));
+            })),
             onClick(qs($page, `[data-action="delete"]`)).pipe(rxjs.mergeMap(() => {
                 const paths = expandSelection().map(({ path }) => path);
                 return rxjs.from(componentDelete(
@@ -194,7 +199,7 @@ function componentLeft(render, { $scroll }) {
     ));
 }
 
-function componentRight(render) {
+function componentRight(render, { getSelectionLength$ }) {
     const ICONS = {
         LIST_VIEW: "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj4KICA8cGF0aCBzdHlsZT0iZmlsbDojNjI2NDY5O2ZpbGwtb3BhY2l0eToxIiBkPSJtIDEzMy4zMzMsNTYgdiA2NCBjIDAsMTMuMjU1IC0xMC43NDUsMjQgLTI0LDI0IEggMjQgQyAxMC43NDUsMTQ0IDAsMTMzLjI1NSAwLDEyMCBWIDU2IEMgMCw0Mi43NDUgMTAuNzQ1LDMyIDI0LDMyIGggODUuMzMzIGMgMTMuMjU1LDAgMjQsMTAuNzQ1IDI0LDI0IHogbSAzNzkuMzM0LDIzMiB2IC02NCBjIDAsLTEzLjI1NSAtMTAuNzQ1LC0yNCAtMjQsLTI0IEggMjEzLjMzMyBjIC0xMy4yNTUsMCAtMjQsMTAuNzQ1IC0yNCwyNCB2IDY0IGMgMCwxMy4yNTUgMTAuNzQ1LDI0IDI0LDI0IGggMjc1LjMzMyBjIDEzLjI1NiwwIDI0LjAwMSwtMTAuNzQ1IDI0LjAwMSwtMjQgeiBtIDAsLTE2OCBWIDU2IGMgMCwtMTMuMjU1IC0xMC43NDUsLTI0IC0yNCwtMjQgSCAyMTMuMzMzIGMgLTEzLjI1NSwwIC0yNCwxMC43NDUgLTI0LDI0IHYgNjQgYyAwLDEzLjI1NSAxMC43NDUsMjQgMjQsMjQgaCAyNzUuMzMzIGMgMTMuMjU2LDAgMjQuMDAxLC0xMC43NDUgMjQuMDAxLC0yNCB6IE0gMTA5LjMzMywyMDAgSCAyNCBDIDEwLjc0NSwyMDAgMCwyMTAuNzQ1IDAsMjI0IHYgNjQgYyAwLDEzLjI1NSAxMC43NDUsMjQgMjQsMjQgaCA4NS4zMzMgYyAxMy4yNTUsMCAyNCwtMTAuNzQ1IDI0LC0yNCB2IC02NCBjIDAsLTEzLjI1NSAtMTAuNzQ1LC0yNCAtMjQsLTI0IHogTSAwLDM5MiB2IDY0IGMgMCwxMy4yNTUgMTAuNzQ1LDI0IDI0LDI0IGggODUuMzMzIGMgMTMuMjU1LDAgMjQsLTEwLjc0NSAyNCwtMjQgdiAtNjQgYyAwLC0xMy4yNTUgLTEwLjc0NSwtMjQgLTI0LC0yNCBIIDI0IEMgMTAuNzQ1LDM2OCAwLDM3OC43NDUgMCwzOTIgWiBtIDE4OS4zMzMsMCB2IDY0IGMgMCwxMy4yNTUgMTAuNzQ1LDI0IDI0LDI0IGggMjc1LjMzMyBjIDEzLjI1NSwwIDI0LC0xMC43NDUgMjQsLTI0IHYgLTY0IGMgMCwtMTMuMjU1IC0xMC43NDUsLTI0IC0yNCwtMjQgSCAyMTMuMzMzIGMgLTEzLjI1NSwwIC0yNCwxMC43NDUgLTI0LDI0IHoiIC8+Cjwvc3ZnPgo=",
         GRID_VIEW: "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgNDQgNDQiPgogIDxwYXRoIGZpbGw9IiM2MjY0NjkiIGQ9Ik0gMTgsNCBIIDYgQyA0LjksNCA0LDQuOSA0LDYgdiAxMiBjIDAsMS4xIDAuOSwyIDIsMiBoIDEyIGMgMS4xLDAgMiwtMC45IDIsLTIgViA2IEMgMjAsNC45IDE5LjEsNCAxOCw0IFoiIC8+CiAgPHBhdGggZmlsbD0iIzYyNjQ2OSIgZD0iTSAzOCw0IEggMjYgYyAtMS4xLDAgLTIsMC45IC0yLDIgdiAxMiBjIDAsMS4xIDAuOSwyIDIsMiBoIDEyIGMgMS4xLDAgMiwtMC45IDIsLTIgViA2IEMgNDAsNC45IDM5LjEsNCAzOCw0IFoiIC8+CiAgPHBhdGggZmlsbD0iIzYyNjQ2OSIgZD0iTSAxOCwyNCBIIDYgYyAtMS4xLDAgLTIsMC45IC0yLDIgdiAxMiBjIDAsMS4xIDAuOSwyIDIsMiBoIDEyIGMgMS4xLDAgMiwtMC45IDIsLTIgViAyNiBjIDAsLTEuMSAtMC45LC0yIC0yLC0yIHoiIC8+CiAgPHBhdGggZmlsbD0iIzYyNjQ2OSIgZD0iTSAzOCwyNCBIIDI2IGMgLTEuMSwwIC0yLDAuOSAtMiwyIHYgMTIgYyAwLDEuMSAwLjksMiAyLDIgaCAxMiBjIDEuMSwwIDIsLTAuOSAyLC0yIFYgMjYgYyAwLC0xLjEgLTAuOSwtMiAtMiwtMiB6IiAvPgo8L3N2Zz4K",
@@ -210,7 +215,6 @@ function componentRight(render) {
         rxjs.filter((event) => event.keyCode === 27),
         rxjs.share(),
     );
-
     const defaultLayout = (view) => {
         switch (view) {
         case "grid": return `<img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.LIST_VIEW}" alt="grid" />`;
@@ -218,48 +222,56 @@ function componentRight(render) {
         default: throw new Error("NOT_IMPLEMENTED");
         }
     };
-    const defaultSort = (sort) => { // TODO
+    const defaultSort = (sort) => {
         return `<img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.SORT}" alt="${sort}" />`;
     };
-    effect(getSelection$().pipe(
-        rxjs.filter((selections) => selections.length === 0),
+
+    effect(getSelectionLength$.pipe(
+        rxjs.filter((l) => l === 0),
         rxjs.mergeMap(() => getState$().pipe(rxjs.first())),
-        rxjs.map(({ view, sort }) => render(createFragment(`
-            <form style="display: inline-block;" onsubmit="event.preventDefault()">
-                <input class="hidden" placeholder="${t("search")}" name="q" style="
-                    background: transparent;
-                    border: none;
-                    padding-left: 5px;
-                    color: var(--color);
-                    font-size: 0.95rem;">
-            </form>
-            <button data-action="search" title="${t("Search")}">
-                <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.MAGNIFYING_GLASS}" alt="search" />
-            </button>
-            <button data-action="view" title="${t("Layout")}">
-                ${defaultLayout(view)}
-            </button>
-            <button data-action="sort" title="${t("Sort")}">
-                ${defaultSort(sort)}
-            </button>
-            <div class="component_dropdown view sort" data-target="sort">
-                <div class="dropdown_container">
-                    <ul>
-                        <li data-target="type">
-                            ${t("Sort By Type")}
-                            <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.CHECK}" alt="check" />
-                        </li>
-                        <li data-target="date">
-                            ${t("Sort By Date")}
-                        </li>
-                        <li data-target="name">
-                            ${t("Sort By Name")}
-                        </li>
-                    </ul>
+        rxjs.map(({ view, sort, search }) => ({
+            search,
+            $page: render(createFragment(`
+                <form style="display: inline-block;" onsubmit="event.preventDefault()">
+                    <input class="hidden" placeholder="${t("search")}" name="q" style="
+                        background: transparent;
+                        border: none;
+                        padding-left: 5px;
+                        color: var(--color);
+                        font-size: 0.95rem;"
+                        value="${search || ""}"
+                </form>
+                <button data-action="search" title="${t("Search")}">
+                    <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.MAGNIFYING_GLASS}" alt="search" />
+                </button>
+                <button data-action="view" title="${t("Layout")}">
+                    ${defaultLayout(view)}
+                </button>
+                <button data-action="sort" title="${t("Sort")}">
+                    ${defaultSort(sort)}
+                </button>
+                <div class="component_dropdown view sort" data-target="sort">
+                    <div class="dropdown_container">
+                        <ul>
+                            <li data-target="type">
+                                ${t("Sort By Type")}
+                                <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,${ICONS.CHECK}" alt="check" />
+                            </li>
+                            <li data-target="date">
+                                ${t("Sort By Date")}
+                            </li>
+                            <li data-target="name">
+                                ${t("Sort By Name")}
+                            </li>
+                            <li data-target="size">
+                                ${t("Sort By Size")}
+                            </li>
+                        </ul>
+                    </div>
                 </div>
-            </div>
-        `))),
-        rxjs.mergeMap(($page) => rxjs.merge(
+            `))
+        })),
+        rxjs.mergeMap(({ $page, search }) => rxjs.merge(
             // feature: view button
             onClick(qs($page, `[data-action="view"]`)).pipe(rxjs.tap(($button) => {
                 const $img = $button.querySelector("img");
@@ -276,7 +288,7 @@ function componentRight(render) {
             // feature: sort button
             rxjs.merge(
                 onClick(qs($page, `[data-action="sort"]`)).pipe(rxjs.map(($el) => { // toggle the dropdown
-                    return !$el.nextSibling.classList.contains("active");
+                    return !$el.nextElementSibling.classList.contains("active");
                 })),
                 escape$.pipe(rxjs.mapTo(false)), // quit the dropdown on esc
                 rxjs.fromEvent(window, "click").pipe( // quit when clicking outside the dropdown
@@ -323,6 +335,7 @@ function componentRight(render) {
                     ),
                 ).pipe(rxjs.map(() => qs($page, "input").classList.contains("hidden"))),
                 escape$.pipe(rxjs.mapTo(false)),
+                search ? rxjs.of(true) : rxjs.EMPTY,
             ).pipe(
                 rxjs.takeUntil(getSelection$().pipe(rxjs.skip(1))),
                 rxjs.mergeMap(async(show) => {
@@ -330,7 +343,6 @@ function componentRight(render) {
                     const $searchImg = qs($page, "img");
                     if (show) {
                         $page.classList.add("hover");
-                        $input.value = "";
                         $input.classList.remove("hidden");
                         $searchImg.setAttribute("src", "data:image/svg+xml;base64," + ICONS.CROSS);
                         $searchImg.setAttribute("alt", "close");
@@ -344,6 +356,7 @@ function componentRight(render) {
                             keyframes: [{ width: "0px" }, { width: "180px" }],
                             time: 200,
                         });
+                        $input.select();
                         $input.focus();
                     } else {
                         $page.classList.remove("hover");
@@ -354,6 +367,7 @@ function componentRight(render) {
                             time: 100,
                         });
                         $input.classList.add("hidden");
+                        $input.value = "";
                         const $listOfButtons = $page.parentElement.firstElementChild.children;
                         for (const $item of $listOfButtons) {
                             $item.classList.remove("hidden");
@@ -364,9 +378,7 @@ function componentRight(render) {
                     return $input;
                 }),
                 rxjs.mergeMap(($input) => rxjs.merge(
-                    rxjs.fromEvent($input, "input").pipe(
-                        rxjs.debounce(() => $input.value ? rxjs.timer(500) : rxjs.of(null)),
-                    ),
+                    rxjs.fromEvent($input, "input"),
                     rxjs.fromEvent($input, "change"),
                 ).pipe(
                     rxjs.map(() => $input.value),
@@ -378,11 +390,11 @@ function componentRight(render) {
     ));
     onDestroy(() => setState("search", ""));
 
-    effect(getSelection$().pipe(
-        rxjs.filter((selections) => selections.length >= 1),
-        rxjs.map(() => render(createFragment(`
+    effect(getSelectionLength$.pipe(
+        rxjs.filter((l) => l >= 1),
+        rxjs.map((size) => render(createFragment(`
             <button data-bind="clear">
-                ${lengthSelection()} <component-icon name="close"></component-icon>
+                ${size} <component-icon name="close"></component-icon>
             </button>
         `))),
         rxjs.mergeMap(($page) => onClick(qs($page, `[data-bind="clear"]`)).pipe(
@@ -416,6 +428,7 @@ function generateLinkAttributes(selections) {
         }
     }
     href += selections.map(({ path }) => "path=" + encodeURIComponent(path)).join("&");
+    href = forwardURLParams(href, ["share"]);
     return `href="${href}" download="${filename}"`;
 }
 

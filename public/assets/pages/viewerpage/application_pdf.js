@@ -6,22 +6,22 @@ import { loadCSS, loadJS } from "../../helpers/loader.js";
 import { join } from "../../lib/path.js";
 import ctrlError from "../ctrl_error.js";
 
-import { transition, getFilename, getDownloadUrl } from "./common.js";
+import { transition } from "./common.js";
 import { renderMenubar, buttonDownload } from "./component_menubar.js";
 
 import "../../components/icon.js";
 
 const hasNativePDF = "application/pdf" in window.navigator.mimeTypes && !!window.chrome;
 
-export default async function(render) {
+export default async function(render, opts) {
     const ctrl = hasNativePDF ? ctrlPDFNative : ctrlPDFJs;
-    ctrl(render);
+    ctrl(render, opts);
 }
 
-function ctrlPDFNative(render) {
+function ctrlPDFNative(render, { getFilename, getDownloadUrl }) {
     const $page = createElement(`
         <div class="component_pdfviewer">
-            <component-menubar></component-menubar>
+            <component-menubar filename="${getFilename()}"></component-menubar>
             <div data-bind="pdf">
                 <embed
                     class="hidden"
@@ -43,17 +43,17 @@ function ctrlPDFNative(render) {
     ));
 }
 
-async function ctrlPDFJs(render) {
+async function ctrlPDFJs(render, { getFilename, getDownloadUrl }) {
     const $page = createElement(`
         <div class="component_pdfviewer">
-            <component-menubar></component-menubar>
+            <component-menubar filename="${getFilename()}"></component-menubar>
             <div data-bind="pdf"></div>
         </div>
     `);
     render($page);
 
     const $container = qs($page, `[data-bind="pdf"]`);
-    const createBr = () => $container.appendChild(document.createElement("br"));
+    const createBr = () => $container.appendChild(createElement(`<div style="height:${document.body.clientWidth > 600 ? 20 : 5}px">&nbsp;</div>`));
     const removeLoader = createLoader($container);
     const base = qs(document.head, "base").getAttribute("href");
     effect(rxjs.from(window.pdfjsLib.getDocument(base + getDownloadUrl()).promise).pipe(
@@ -62,15 +62,22 @@ async function ctrlPDFJs(render) {
             createBr();
             for (let i=0; i<pdf.numPages; i++) {
                 const page = await pdf.getPage(i + 1);
+                const marginLeftRight = (document.body.clientWidth > 600 ? 50 : 15);
+                const ratio = window.devicePixelRatio || 1;
                 const viewport = page.getViewport({
                     scale: Math.min(
-                        Math.max(document.body.clientWidth - 200, 0),
+                        Math.max(
+                            document.body.clientWidth - marginLeftRight,
+                            0,
+                        ),
                         800,
-                    ) / page.getViewport({ scale: 1 }).width,
+                    ) / page.getViewport({ scale: 1 / ratio }).width,
                 });
                 const $canvas = document.createElement("canvas");
                 $canvas.height = viewport.height;
                 $canvas.width = viewport.width;
+                $canvas.style.width = Math.floor(viewport.width / ratio) + "px";
+                $canvas.style.height = Math.floor(viewport.height / ratio) + "px";
                 $container.appendChild($canvas);
                 if (window.env === "test") $canvas.getContext = () => null;
                 await page.render({

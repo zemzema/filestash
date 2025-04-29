@@ -37,13 +37,13 @@ function componentBody(render, { load$ }) {
         <div class="content">
             <div class="content_box">
                 <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0NDggNTEyIj4KICA8cGF0aCBzdHlsZT0iZmlsbDojMDAwMDAwO2ZpbGwtb3BhY2l0eTowLjIiIGQ9Ik0gNDAwLDY0IEggMzUyIFYgMTIgQyAzNTIsNS40IDM0Ni42LDAgMzQwLDAgaCAtNDAgYyAtNi42LDAgLTEyLDUuNCAtMTIsMTIgViA2NCBIIDE2MCBWIDEyIEMgMTYwLDUuNCAxNTQuNiwwIDE0OCwwIEggMTA4IEMgMTAxLjQsMCA5Niw1LjQgOTYsMTIgViA2NCBIIDQ4IEMgMjEuNSw2NCAwLDg1LjUgMCwxMTIgdiAzNTIgYyAwLDI2LjUgMjEuNSw0OCA0OCw0OCBoIDM1MiBjIDI2LjUsMCA0OCwtMjEuNSA0OCwtNDggViAxMTIgQyA0NDgsODUuNSA0MjYuNSw2NCA0MDAsNjQgWiBtIC0yLDQwNCBIIDUwIGMgLTMuMywwIC02LjAyMjE0NywtMi43MDAwNyAtNiwtNiBWIDE1NCBoIDM2MCB2IDMwOCBjIDAsMy4zIC0yLjcsNiAtNiw2IHoiIC8+Cjwvc3ZnPgo=" alt="schedule">
-                <div class="headline" data-bind="date">-</div>
-                <div class="description" data-bind="time">-</div>
+                <div class="headline ellipsis" data-bind="date">-</div>
+                <div class="description ellipsis" data-bind="time">-</div>
             </div>
             <div class="content_box">
                 <img class="component_icon" draggable="false" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj4KICA8cGF0aCBzdHlsZT0iZmlsbDojMDAwMDAwO2ZpbGwtb3BhY2l0eTowLjIiIGQ9Ik01MTIgMTQ0djI4OGMwIDI2LjUtMjEuNSA0OC00OCA0OEg0OGMtMjYuNSAwLTQ4LTIxLjUtNDgtNDhWMTQ0YzAtMjYuNSAyMS41LTQ4IDQ4LTQ4aDg4bDEyLjMtMzIuOWM3LTE4LjcgMjQuOS0zMS4xIDQ0LjktMzEuMWgxMjUuNWMyMCAwIDM3LjkgMTIuNCA0NC45IDMxLjFMMzc2IDk2aDg4YzI2LjUgMCA0OCAyMS41IDQ4IDQ4ek0zNzYgMjg4YzAtNjYuMi01My44LTEyMC0xMjAtMTIwcy0xMjAgNTMuOC0xMjAgMTIwIDUzLjggMTIwIDEyMCAxMjAgMTIwLTUzLjggMTIwLTEyMHptLTMyIDBjMCA0OC41LTM5LjUgODgtODggODhzLTg4LTM5LjUtODgtODggMzkuNS04OCA4OC04OCA4OCAzOS41IDg4IDg4eiIgLz4KPC9zdmc+Cg==" alt="camera">
-                <div class="headline" data-bind="camera-setting">-</div>
-                <div class="description" data-bind="camera-name">-</div>
+                <div class="headline ellipsis" data-bind="camera-setting">-</div>
+                <div class="description ellipsis" data-bind="camera-name">-</div>
             </div>
             <div data-bind="map"></div>
             <div data-bind="all">
@@ -102,7 +102,6 @@ async function componentMap(render, { metadata }) {
     const TILE_SIZE = Math.floor($page.clientWidth / 3 * 100) / 100;
     if (TILE_SIZE === 0) return;
     $page.style.height = "${TILE_SIZE*3}px;";
-    const defaultTo = (val, def) => val === undefined ? val : def;
     const mapper = (function map_url(lat, lng, zoom) {
         // https://wiki.openstreetmap.org/wiki/Slippy_map_tilenamse
         const n = Math.pow(2, zoom);
@@ -119,16 +118,13 @@ async function componentMap(render, { metadata }) {
                     .replace("${z}", Math.floor(zoom));
             },
             position: function() {
-                const t0 = defaultTo(tile_numbers[0], 0);
-                const t1 = defaultTo(tile_numbers[1], 0);
                 return [
-                    t0 - Math.floor(t0),
-                    t1 - Math.floor(t1),
+                    tile_numbers[0] - Math.floor(tile_numbers[0]),
+                    tile_numbers[1] - Math.floor(tile_numbers[1]),
                 ];
             },
         };
     }(lat, lng, 11));
-    const center = (position, i) => Math.floor(TILE_SIZE * (1 + position[i]) * 1000)/1000;
     const $tiles = createElement(`
         <div class="bigpicture">
             <div class="line">
@@ -151,9 +147,10 @@ async function componentMap(render, { metadata }) {
     qs($page, `[data-bind="maptile"]`).appendChild($tiles);
     const pos = mapper.position();
     qs($page, ".marker").setAttribute("style", `
-        left: ${TILE_SIZE * (1 + defaultTo(pos[0], 0)) - 15}px;
-        top: ${TILE_SIZE * (1 + defaultTo(pos[1], 0)) - 30}px;
+        left: ${TILE_SIZE * (1 + pos[0]) - 15}px;
+        top: ${TILE_SIZE * (1 + pos[1]) - 30}px;
     `);
+    const center = (position, i) => Math.floor(TILE_SIZE * (1 + position[i]) * 1000)/1000;
     $tiles.setAttribute("style", `transform-origin: ${center(mapper.position(), 0)}px ${center(mapper.position(), 1)}px;`);
 }
 
@@ -206,8 +203,8 @@ function componentMore(render, { metadata }) {
             break;
         default: $all.appendChild(createElement(`
             <div class="meta_key">
-                <div class="title">${formatKey(key)}: </div>
-                <div class="value">${formatValue(key)}</div>
+                <div class="title ellipsis">${formatKey(key)}: </div>
+                <div class="value ellipsis" title="${formatValue(key)}">${formatValue(key)}</div>
             </div>
         `));
         }

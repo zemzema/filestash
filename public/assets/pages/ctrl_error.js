@@ -1,5 +1,5 @@
 import { createElement, createRender } from "../lib/skeleton/index.js";
-import { toHref, fromHref } from "../lib/skeleton/router.js";
+import { toHref, fromHref, navigate } from "../lib/skeleton/router.js";
 import { forwardURLParams } from "../lib/path.js";
 import rxjs, { effect, applyMutation } from "../lib/rx.js";
 import { qs } from "../lib/dom.js";
@@ -9,20 +9,29 @@ import { AjaxError, ApplicationError } from "../lib/error.js";
 
 import "../components/icon.js";
 
-const strToHTML = (str) => str
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll(" ", "&nbsp;");
+export default function(render) {
+    let hasBack = window.self === window.top;
+    if (!render) {
+        render = createRender(document.body);
+        try { render = createRender(qs(document.body, "[role=\"main\"]")); }
+        catch (err) { hasBack = false; }
+    }
 
-export default function(render = createRender(qs(document.body, "[role=\"main\"]"))) {
     return function(err) {
         const [msg, trace] = processError(err);
 
-        const link = forwardURLParams(calculateBacklink(fromHref(window.location.pathname)), ["share"]);
+        const shouldRedirectLogin = err instanceof AjaxError && err.err().status === 401;
+        let link = "";
+        if (hasBack) {
+            link = forwardURLParams(calculateBacklink(fromHref(window.location.pathname)), ["share"]);
+            if (shouldRedirectLogin) {
+                link = fromHref("/login?next=" + encodeURIComponent(forwardURLParams(fromHref(window.location.pathname), ["share"])));
+            }
+        }
         const $page = createElement(`
             <div>
                 <style>${css}</style>
-                <a href="${link}" class="backnav">
+                <a href="${link}" class="backnav ${!hasBack && "hidden"}">
                     <component-icon name="arrow_left"></component-icon>
                     ${t("home")}
                 </a>
@@ -33,7 +42,7 @@ export default function(render = createRender(qs(document.body, "[role=\"main\"]
                         <p>
                             <button class="light" data-bind="details">${t("More details")}</button>
                             <button class="primary" data-bind="refresh">${t("Reload")}</button>
-                            <pre class="hidden"><code>${strToHTML(trace)}</code></pre>
+                            <pre class="hidden"><code>${formatTrace(trace)}</code></pre>
                         </p>
                     </div>
                 </div>
@@ -52,7 +61,7 @@ export default function(render = createRender(qs(document.body, "[role=\"main\"]
         const $refresh = qs($page, "button[data-bind=\"refresh\"]");
         if (shouldHideRefreshButton) $refresh.remove();
         else effect(rxjs.fromEvent($refresh, "click").pipe(
-            rxjs.tap(() => location.reload())
+            rxjs.tap(() => shouldRedirectLogin ? navigate(link) : location.reload()),
         ));
 
         return rxjs.EMPTY;
@@ -62,7 +71,7 @@ export default function(render = createRender(qs(document.body, "[role=\"main\"]
 function processError(err) {
     let msg, trace;
     if (err instanceof AjaxError) {
-        msg = t(err.message);
+        msg = t(err.code());
         trace = `
 type:    ${err.type()}
 code:    ${err.code()}
@@ -82,6 +91,16 @@ message: ${err.message}
 trace:   ${err.stack || "N/A"}`;
     }
     return [msg, trace.trim()];
+}
+
+function formatTrace(str) {
+    return str
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll(" ", "&nbsp;")
+        .split("\n")
+        .map((line) => line.indexOf("/lib/vendor/") === -1 ? line : `<span style="opacity:0.25">${line}</span>`)
+        .join("\n");
 }
 
 const css = `

@@ -9,11 +9,23 @@ const config$ = ajax({
     rxjs.map(({ responseJSON }) => responseJSON.result),
 );
 
-export function get() {
-    return config$;
-}
+let CONFIG = {};
 
 export async function init() {
     const config = await config$.toPromise();
-    window.CONFIG = config;
+    CONFIG = config;
+    return config;
+}
+
+export function get(key, defaultValue) {
+    if (key) return CONFIG[key] || defaultValue;
+    return CONFIG;
+}
+
+export function getVersion() {
+    return get("version", "na");
+}
+
+export function query() {
+    return config$;
 }

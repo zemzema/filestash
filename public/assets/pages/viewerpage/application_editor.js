@@ -2,6 +2,7 @@ import { createElement, onDestroy } from "../../lib/skeleton/index.js";
 import rxjs, { effect } from "../../lib/rx.js";
 import { animate, slideXIn, opacityOut } from "../../lib/animate.js";
 import { qs } from "../../lib/dom.js";
+import { get as getConfig } from "../../model/config.js";
 import { createLoader } from "../../components/loader.js";
 import { createModal, MODAL_RIGHT_BUTTON } from "../../components/modal.js";
 import { loadCSS, loadJS } from "../../helpers/loader.js";
@@ -11,7 +12,6 @@ import t from "../../locales/index.js";
 
 import ctrlError from "../ctrl_error.js";
 import ctrlDownloader, { init as initDownloader } from "./application_downloader.js";
-import { getFilename, getDownloadUrl } from "./common.js";
 import { $ICON } from "./common_fab.js";
 import { cat, save } from "./model_files.js";
 
@@ -21,10 +21,10 @@ import "../../components/icon.js";
 
 const TIME_BEFORE_ABORT_EDIT = 5000;
 
-export default async function(render, { acl$ }) {
+export default async function(render, { acl$, getFilename, getDownloadUrl }) {
     const $page = createElement(`
         <div class="component_ide">
-            <component-menubar class="hidden"></component-menubar>
+            <component-menubar filename="${getFilename()}" class="hidden"></component-menubar>
             <div class="component_editor hidden"></div>
             <button is="component-fab" class="hidden"></button>
         </div>
@@ -48,7 +48,7 @@ export default async function(render, { acl$ }) {
             // memory. This also account for terrible network conditions when out in
             // the bush; we abort after:
             // TIME_BEFORE_ABORT_EDIT + NETWORK LATENCY seconds
-            cat(),
+            cat(getDownloadUrl()),
             rxjs.of(null).pipe(
                 rxjs.delay(TIME_BEFORE_ABORT_EDIT),
                 rxjs.mergeMap(() => ajax("about")),
@@ -61,12 +61,12 @@ export default async function(render, { acl$ }) {
             if (content === null || has_binary(content)) return rxjs.from(initDownloader()).pipe(
                 removeLoader,
                 rxjs.mergeMap(() => {
-                    ctrlDownloader(render);
+                    ctrlDownloader(render, { acl$, getFilename, getDownloadUrl });
                     return rxjs.EMPTY;
                 }),
             );
             return rxjs.of(content).pipe(
-                rxjs.mergeMap((content) => rxjs.of(window.CONFIG).pipe(
+                rxjs.mergeMap((content) => rxjs.of(getConfig()).pipe(
                     rxjs.mergeMap((config) => rxjs.from(loadKeybinding(config.editor)).pipe(rxjs.mapTo(config))),
                     rxjs.map((config) => [content, config]),
                     rxjs.mergeMap((arr) => rxjs.from(loadMode(extname(getFilename()))).pipe(
@@ -100,10 +100,8 @@ export default async function(render, { acl$ }) {
                         const cleanup = window.CodeMirror.orgmode.init(editor);
                         onDestroy(cleanup);
                     }
-
                     onDestroy(() => editor.clearHistory());
                     $dom.menubar().classList.remove("hidden");
-                    editor.execCommand("save");
                     return editor;
                 }),
                 rxjs.tap((editor) => requestAnimationFrame(() => editor.refresh())),

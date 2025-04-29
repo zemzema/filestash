@@ -38,6 +38,7 @@ type FormElement struct {
 	Type        string      `json:"type"`
 	Description string      `json:"description,omitempty"`
 	Placeholder string      `json:"placeholder,omitempty"`
+	Pattern     string      `json:"pattern,omitempty"`
 	Opts        []string    `json:"options,omitempty"`
 	Target      []string    `json:"target,omitempty"`
 	ReadOnly    bool        `json:"readonly"`
@@ -67,7 +68,7 @@ func NewConfiguration() Configuration {
 					FormElement{Name: "name", Type: "text", Default: "Filestash", Description: "Name has shown in the UI", Placeholder: "Default: \"Filestash\""},
 					FormElement{Name: "port", Type: "number", Default: 8334, Description: "Port on which the application is available.", Placeholder: "Default: 8334"},
 					FormElement{Name: "host", Type: "text", Description: "The host people need to use to access this server", Placeholder: "Eg: \"demo.filestash.app\""},
-					FormElement{Name: "secret_key", Type: "password", Description: "The key that's used to encrypt and decrypt content. Update this settings will invalidate existing user sessions and shared links, use with caution!"},
+					FormElement{Name: "secret_key", Type: "password", Required: true, Pattern: "[a-zA-Z0-9]{16}", Description: "The key that's used to encrypt and decrypt content. Update this settings will invalidate existing user sessions and shared links, use with caution!"},
 					FormElement{Name: "force_ssl", Type: "boolean", Description: "Enable the web security mechanism called 'Strict Transport Security'"},
 					FormElement{Name: "editor", Type: "select", Default: "emacs", Opts: []string{"base", "emacs", "vim"}, Description: "Keybinding to be use in the editor. Default: \"emacs\""},
 					FormElement{Name: "fork_button", Type: "boolean", Default: true, Description: "Display the fork button in the login screen"},
@@ -75,7 +76,8 @@ func NewConfiguration() Configuration {
 					FormElement{Name: "display_hidden", Type: "boolean", Default: false, Description: "Should files starting with a dot be visible by default?"},
 					FormElement{Name: "refresh_after_upload", Type: "boolean", Default: false, Description: "Refresh directory listing after upload"},
 					FormElement{Name: "upload_button", Type: "boolean", Default: false, Description: "Display the upload button on any device"},
-					FormElement{Name: "upload_pool_size", Type: "number", Default: 15, Description: "Maximum number of files upload in parallel (Default: 15)"},
+					FormElement{Name: "upload_pool_size", Type: "number", Default: 15, Description: "Maximum number of files upload in parallel. Default: 15"},
+					FormElement{Name: "upload_chunk_size", Type: "number", Default: 0, Description: "Size of Chunks for Uploads in MB."},
 					FormElement{Name: "filepage_default_view", Type: "select", Default: "grid", Opts: []string{"list", "grid"}, Description: "Default layout for files and folder on the file page"},
 					FormElement{Name: "filepage_default_sort", Type: "select", Default: "type", Opts: []string{"type", "date", "name"}, Description: "Default order for files and folder on the file page"},
 					FormElement{Name: "cookie_timeout", Type: "number", Default: 60 * 24 * 7, Description: "Authentication Cookie expiration in minutes. Default: 60 * 24 * 7 = 1 week"},
@@ -105,6 +107,7 @@ func NewConfiguration() Configuration {
 						Elmnts: []FormElement{
 							FormElement{Name: "iframe", Type: "text", Default: "", Description: "list of domains who can use the application from an iframe. eg: https://www.filestash.app http://example.com"},
 							FormElement{Name: "enable_chromecast", Type: "boolean", Default: true, Description: "Enable users to stream content on a chromecast device. This feature requires the browser to access google's server to download the chromecast SDK."},
+							FormElement{Name: "signature", Type: "text", Default: "", Description: "Enforce signature when using URL parameters in the authentication process"},
 						},
 					},
 				},
@@ -359,12 +362,15 @@ func (this *Configuration) Export() interface{} {
 		Logout                  string            `json:"logout"`
 		MimeTypes               map[string]string `json:"mime"`
 		UploadPoolSize          int               `json:"upload_pool_size"`
+		UploadChunkSize         int               `json:"upload_chunk_size"`
 		RefreshAfterUpload      bool              `json:"refresh_after_upload"`
 		FilePageDefaultSort     string            `json:"default_sort"`
 		FilePageDefaultView     string            `json:"default_view"`
 		AuthMiddleware          []string          `json:"auth"`
 		Thumbnailer             []string          `json:"thumbnailer"`
 		EnableChromecast        bool              `json:"enable_chromecast"`
+		Origin                  string            `json:"origin"`
+		Version                 string            `json:"version"`
 	}{
 		Editor:                  this.Get("general.editor").String(),
 		ForkButton:              this.Get("general.fork_button").Bool(),
@@ -378,6 +384,7 @@ func (this *Configuration) Export() interface{} {
 		Logout:                  this.Get("general.logout").String(),
 		MimeTypes:               AllMimeTypes(),
 		UploadPoolSize:          this.Get("general.upload_pool_size").Int(),
+		UploadChunkSize:         this.Get("general.upload_chunk_size").Int(),
 		RefreshAfterUpload:      this.Get("general.refresh_after_upload").Bool(),
 		FilePageDefaultSort:     this.Get("general.filepage_default_sort").String(),
 		FilePageDefaultView:     this.Get("general.filepage_default_view").String(),
@@ -400,6 +407,18 @@ func (this *Configuration) Export() interface{} {
 			return tArray
 		}(),
 		EnableChromecast: this.Get("features.protection.enable_chromecast").Bool(),
+		Origin: func() string {
+			host := this.Get("general.host").String()
+			if host == "" {
+				return ""
+			}
+			scheme := "http://"
+			if this.Get("general.force_ssl").Bool() {
+				scheme = "https://"
+			}
+			return scheme + host
+		}(),
+		Version: BUILD_REF,
 	}
 }
 

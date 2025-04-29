@@ -1,6 +1,8 @@
 import { createElement } from "../../lib/skeleton/index.js";
 import { animate, opacityOut, opacityIn } from "../../lib/animate.js";
 import assert from "../../lib/assert.js";
+import { forwardURLParams } from "../../lib/path.js";
+import { get as getConfig } from "../../model/config.js";
 
 import { extractPath, isDir, isNativeFileUpload } from "./helper.js";
 import { files$ } from "./ctrl_filesystem.js";
@@ -24,11 +26,12 @@ const IMAGE = {
 let TYPES = null;
 export function init() {
     TYPES = {
-        MIME: window.CONFIG.mime,
+        MIME: getConfig("mime", {}),
         THUMBNAILER: (function() {
             const set = new Set();
-            for (let i=0; i<window.CONFIG.thumbnailer.length; i++) {
-                set.add(window.CONFIG.thumbnailer[i]);
+            const thumbnailers = getConfig("thumbnailer");
+            for (let i=0; i<thumbnailers.length; i++) {
+                set.add(thumbnailers[i]);
             }
             return set;
         })(),
@@ -39,13 +42,14 @@ const $tmpl = createElement(`
     <a href="__TEMPLATE__" class="component_thing no-select" draggable="false" data-link>
         <div class="component_checkbox"><input name="select" type="checkbox"><span class="indicator"></span></div>
         <img class="component_icon" loading="lazy" draggable="false" src="__TEMPLATE__" alt="directory">
-        <div class="info_extension"><span></span></div>
+        <div class="info_extension"><span class="ellipsis"></span></div>
         <span class="component_filename">
-            <span class="file-details"><span>
+            <span class="file-details"><span class="ellipsis">
                 <span class="component_filesize">(281B)</span>
             </span></span>
         </span>
         <span class="component_datetime"></span>
+        <div class="component_action"></div>
         <div class="selectionOverlay"></div>
     </a>
 `);
@@ -64,8 +68,8 @@ export function createThing({
     loading = false,
     link = "",
     view = "",
+    search = "",
     n = 0,
-    read_only = false,
     permissions = {},
 }) {
     const [, ext] = formatFile(name);
@@ -81,12 +85,13 @@ export function createThing({
     const $label = $thing.children[3].firstElementChild.firstElementChild; // = qs($thing, ".component_filename .file-details > span");
     const $time = $thing.children[4]; // = qs($thing, ".component_datetime");
 
-    $link.setAttribute("href", link + location.search);
+    $link.setAttribute("href", link);
+    if (location.search) $link.setAttribute("href", forwardURLParams(link, ["share", "canary"]));
     $thing.setAttribute("data-droptarget", type === "directory");
     $thing.setAttribute("data-n", n);
     $thing.setAttribute("data-path", path);
     $thing.classList.add("view-" + view);
-    $time.textContent = formatTime(new Date(time));
+    $time.textContent = formatTime(time);
     $img.setAttribute("src", (type === "file" ? IMAGE.FILE : IMAGE.FOLDER));
     $label.textContent = name;
 
@@ -135,11 +140,9 @@ export function createThing({
 
     if (loading) {
         $img.setAttribute("src", IMAGE.LOADING);
+        $img.setAttribute("alt", "loading");
         $link.setAttribute("href", "#");
         $extension.innerHTML = "";
-        return $thing;
-    } else if (read_only === true) {
-        $checkbox.classList.add("hidden");
         return $thing;
     } else if (type === "hidden") {
         $thing.classList.add("hidden");
@@ -192,7 +195,9 @@ export function createThing({
     return $thing;
 }
 
-function formatTime(date) {
+function formatTime(unixTime) {
+    if (unixTime <= 0) return "";
+    const date = new Date(unixTime);
     if (!date) return "";
     // Intl.DateTimeFormat is slow and in the hot path, so
     // let's render date manually if possible

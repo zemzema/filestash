@@ -48,7 +48,11 @@ async function createFormNodes(node, { renderNode, renderLeaf, renderInput, path
         // CASE 2: leaf node
         else {
             const currentPath = path.concat(key);
-            const $leaf = renderLeaf({ ...node[key], path: currentPath, label: key });
+            const $leaf = renderLeaf({
+                ...withMarkdown(node[key]),
+                path: currentPath,
+                label: key,
+            });
             const $input = await renderInput({ ...node[key], path: currentPath.filter((chunk) => !!chunk) });
             const $target = $leaf.querySelector("[data-bind=\"children\"]") || $leaf;
 
@@ -117,4 +121,16 @@ export async function createForm(node, opts) {
         $container.appendChild($node);
     });
     return $container;
+}
+
+function withMarkdown(obj) {
+    if (!("description" in obj)) return obj;
+    obj["description"] = toMarkdown(obj["description"]);
+    return obj;
+}
+
+function toMarkdown(str = "") {
+    str = str.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "<a href=\"$2\">$1</a>");
+    str = str.replaceAll("\n", "<br>");
+    return str;
 }

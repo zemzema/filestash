@@ -46,15 +46,28 @@ export default async function(render) {
     const removeLoader = createLoader($header);
     const $listBefore = qs($page, ".ifscroll-before");
     const $listAfter = qs($page, ".ifscroll-after");
-    const refreshOnResize$ = rxjs.fromEvent(window, "resize").pipe(
-        rxjs.startWith(null),
-        rxjs.map(() => [
-            gridSize($list.clientWidth, document.body.clientWidth),
-            document.body.clientHeight,
-        ]),
-        rxjs.distinctUntilChanged((prev, curr) => {
-            return prev[0] === curr[0] && prev[1] && curr[1];
-        }),
+    const refreshScreen$ = rxjs.merge(
+        // case1: trigger the first display
+        rxjs.of(null),
+        // case2: height change => redraw screen
+        rxjs.fromEvent(window, "resize").pipe( // height change = always redraw
+            rxjs.startWith(null),
+            rxjs.map(() => document.body.clientHeight),
+            rxjs.distinctUntilChanged(),
+            rxjs.skip(1),
+        ),
+        // case3: width change => redraw if grid size change
+        rxjs.fromEvent(window, "resize").pipe(
+            rxjs.startWith(null),
+            rxjs.map(() => {
+                if ($list.getAttribute("data-type") === "grid") {
+                    return gridSize($list.clientWidth, document.body.clientWidth);
+                }
+                return 0;
+            }),
+            rxjs.distinctUntilChanged(),
+            rxjs.skip(1),
+        ),
     );
 
     let count = 0;
@@ -66,11 +79,16 @@ export default async function(render) {
                 const removeLoader = createLoader($header);
                 $listBefore.setAttribute("style", "");
                 $listAfter.setAttribute("style", "");
-                return search(state.search).pipe(rxjs.map(({ files }) => ({
-                    files, read_only: true, ...state, ...rest,
-                })), removeLoader);
+                return rxjs.timer(state.search ? 450 : 0).pipe(
+                    rxjs.switchMap(() => search(state.search).pipe(
+                        rxjs.map(({ files }) => ({
+                            files, ...state, ...rest,
+                        })),
+                    )),
+                    rxjs.finalize(() => effect(rxjs.of(null).pipe(removeLoader))),
+                );
             }
-            return rxjs.of({ files, read_only: false, ...state, ...rest });
+            return rxjs.of({ files, ...state, ...rest });
         }))),
         rxjs.mergeMap((obj) => getPermission(path).pipe(
             rxjs.map((permissions) => ({ ...obj, permissions })),
@@ -88,10 +106,10 @@ export default async function(render) {
                 renderEmpty(createRender(qs($page, `[data-target="header"]`)), search ? ICONS.EMPTY_SEARCH : ICONS.EMPTY_FILES);
                 return rxjs.EMPTY;
             }
-            return rxjs.of({ ...rest, files });
+            return rxjs.of({ ...rest, files, search });
         }),
-        rxjs.mergeMap((obj) => refreshOnResize$.pipe(rxjs.mapTo(obj))),
-        rxjs.mergeMap(({ files, view, read_only, count, permissions }) => { // STEP1: setup the list of files
+        rxjs.mergeMap((obj) => refreshScreen$.pipe(rxjs.mapTo(obj))),
+        rxjs.mergeMap(({ files, view, search, count, permissions }) => { // STEP1: setup the list of files
             $list.closest(".scroll-y").scrollTop = 0;
             let FILE_HEIGHT, COLUMN_PER_ROW;
             switch (view) {
@@ -123,7 +141,7 @@ export default async function(render) {
                     ...file,
                     ...createLink(file, currentPath()),
                     view,
-                    read_only,
+                    search,
                     n: i,
                     permissions,
                 }));
@@ -137,7 +155,7 @@ export default async function(render) {
             /// ///////////////////////////////////
             // CASE 1: virtual scroll isn't enabled
             if (files.length <= VIRTUAL_SCROLL_MINIMUM_TRIGGER) {
-                return rxjs.EMPTY;
+                return rxjs.of({ virtual: false });
             }
 
             /// ///////////////////////////////////
@@ -157,8 +175,9 @@ export default async function(render) {
             setHeight(0);
             const top = ($node) => $node.getBoundingClientRect().top;
             return rxjs.of({
+                virtual: true,
                 files,
-                read_only,
+                search,
                 path,
                 view,
                 permissions,
@@ -172,13 +191,18 @@ export default async function(render) {
             });
         }),
         rxjs.switchMap(({
-            files, path, view, read_only, permissions,
+            files, path, view, search, permissions,
             BLOCK_SIZE, COLUMN_PER_ROW, FILE_HEIGHT,
             MARGIN,
             currentState,
-            /* height, */ setHeight,
+            setHeight,
             $list,
-        }) => rxjs.fromEvent($page.closest(".scroll-y"), "scroll", { passive: true }).pipe(
+            virtual,
+        }) => (
+            virtual
+                ? rxjs.fromEvent($page.closest(".scroll-y"), "scroll", { passive: true })
+                : rxjs.EMPTY
+        ).pipe(
             rxjs.map((e) => {
                 // 0-------------0-----------1-----------2-----------3 ....
                 //    [padding]     $block1     $block2     $block3    ....
@@ -232,8 +256,8 @@ export default async function(render) {
                     }));
                     else $fs.appendChild(createThing({
                         ...file,
-                        read_only,
                         ...createLink(file, path),
+                        search,
                         view,
                         permissions,
                         n: i,
@@ -329,7 +353,7 @@ function createLink(file, currentPath) {
     let path = file.path;
     if (!path) path = currentPath + file.name + (file.type === "directory" ? "/" : "");
     let link = file.type === "directory" ? "files" + path : "view" + path;
-    link = link.replaceAll("#", "%23");
+    link = encodeURIComponent(link).replaceAll("%2F", "/");
     return {
         path,
         link,

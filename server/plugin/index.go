@@ -2,9 +2,9 @@ package plugin
 
 import (
 	. "github.com/mickael-kerjean/filestash/server/common"
-	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_admin"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_htpasswd"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_ldap"
+	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_local"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_openid"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_passthrough"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_authenticate_saml"
@@ -25,9 +25,11 @@ import (
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_backend_sftp"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_backend_storj"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_backend_tmp"
+	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_backend_url"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_backend_webdav"
-	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_editor_onlyoffice"
+	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_editor_wopi"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_handler_console"
+	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_handler_mcp"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_image_ascii"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_image_c"
 	_ "github.com/mickael-kerjean/filestash/server/plugin/plg_image_transcode"

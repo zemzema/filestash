@@ -5,6 +5,7 @@ import ajax from "../../lib/ajax.js";
 import { qs, qsa, safe } from "../../lib/dom.js";
 import { animate, slideYIn, transition, opacityIn } from "../../lib/animate.js";
 import assert from "../../lib/assert.js";
+import { forwardURLParams } from "../../lib/path.js";
 import { createForm } from "../../lib/form.js";
 import { settings_get, settings_put } from "../../lib/settings.js";
 import t from "../../locales/index.js";
@@ -19,8 +20,8 @@ import backend$ from "./model_backend.js";
 import { setCurrentBackend, getCurrentBackend, getURLParams } from "./ctrl_form_state.js";
 
 const connections$ = config$.pipe(
-    rxjs.map(({ connections = [], auth = [] }) => connections.map((conn) => {
-        conn.middleware = auth.indexOf(conn.label) >= 0;
+    rxjs.map(({ connections, auth }) => (connections || []).map((conn) => {
+        conn.middleware = (auth || []).indexOf(conn.label) >= 0;
         return conn;
     })),
     rxjs.shareReplay(1),
@@ -174,6 +175,7 @@ export default async function(render) {
             if (Object.keys(p).length > 0) {
                 url += "&state=" + btoa(JSON.stringify(p));
             }
+            toggleLoader(true);
             location.href = url;
             return rxjs.EMPTY;
         }),
@@ -203,7 +205,9 @@ export default async function(render) {
                     const GET = getURLParams();
                     if (GET["next"]) redirectURL = GET["next"];
                     else if (responseJSON.result) redirectURL = toHref("/files" + responseJSON.result);
-                    navigate(redirectURL);
+
+                    if (redirectURL.startsWith("/api/")) return location.replace(redirectURL);
+                    navigate(forwardURLParams(redirectURL, ["nav"]));
                 }),
                 rxjs.catchError((err) => {
                     toggleLoader(false);
@@ -219,5 +223,10 @@ export default async function(render) {
         rxjs.filter((conns) => conns.length === 0),
         rxjs.mergeMap(() => Promise.reject(new Error("there is nothing here"))), // TODO: check translation?
         rxjs.catchError(ctrlError()),
+    ));
+
+    // feature8: bug on back navigation where loader get stuck
+    effect(rxjs.fromEvent(window, "pageshow").pipe(
+        rxjs.tap((event) => event.persisted && toggleLoader(false)),
     ));
 }

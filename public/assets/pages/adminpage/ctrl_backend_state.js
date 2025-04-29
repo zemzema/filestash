@@ -1,7 +1,7 @@
 import rxjs from "../../lib/rx.js";
 import { qs } from "../../lib/dom.js";
 import { ApplicationError } from "../../lib/error.js";
-import { get as getConfig } from "../../model/config.js";
+import { query as getConfig } from "../../model/config.js";
 import { get as getAdminConfig } from "./model_config.js";
 import { formObjToJSON$ } from "./helper_form.js";
 
@@ -111,6 +111,7 @@ export function getState() {
                         .map(([key, value]) => [key.replace(new RegExp(`^${authType}\.`), ""), value]) // format the relevant keys
                         .reduce((acc, [key, value]) => { // transform onto something ready to be saved
                             if (key === "type") return acc;
+                            else if (key === "banner") return acc;
                             else if (typeof key !== "string") return acc;
                             return {
                                 ...acc,

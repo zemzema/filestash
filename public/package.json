@@ -67,6 +67,10 @@
           "allowTemplateLiterals": true
         }
       ],
+      "quote-props": [
+        "error",
+        "consistent"
+      ],
       "indent": [
         "error",
         4
@@ -122,6 +126,12 @@
         "off"
       ],
       "no-template-curly-in-string": [
+        "off"
+      ],
+      "new-cap": [
+        "off"
+      ],
+      "accessor-pairs": [
         "off"
       ]
     }

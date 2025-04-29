@@ -1,47 +1,90 @@
 import rxjs, { ajax } from "./rx.js";
 import { AjaxError } from "./error.js";
+import { isSDK, urlSDK } from "../helpers/sdk.js";
 
 export default function(opts) {
     if (typeof opts === "string") opts = { url: opts, withCredentials: true };
     else if (typeof opts !== "object") throw new Error("unsupported call");
+
     if (!opts.headers) opts.headers = {};
+    if (!opts.responseType) opts.responseType = "text";
     opts.headers["X-Requested-With"] = "XmlHttpRequest";
     if (window.BEARER_TOKEN) opts.headers["Authorization"] = `Bearer ${window.BEARER_TOKEN}`;
-    return ajax({ withCredentials: true, ...opts, responseType: "text" }).pipe(
+
+    if (opts.url.startsWith("data:")) return rxjs.of({ response: parseDataUrl(opts.url) });
+    if (isSDK()) {
+        if (["/api/config"].indexOf(opts.url) === -1) opts.withCredentials = false;
+        opts.url = urlSDK(opts.url);
+    }
+
+    const responseType = opts.responseType === "json" ? "text" : opts.responseType;
+    return ajax({
+        withCredentials: true,
+        ...opts,
+        responseType,
+    }).pipe(
         rxjs.map((res) => {
-            const result = res.xhr.responseText;
             if (opts.responseType === "json") {
-                const json = JSON.parse(result);
-                res.responseJSON = json;
-                if (json.status !== "ok") {
+                const result = res.xhr.responseText;
+                res.responseJSON = JSON.parse(result);
+                if (res.responseJSON.status !== "ok") {
                     throw new AjaxError("Oups something went wrong", result);
                 }
             }
             return res;
         }),
-        rxjs.catchError((err) => rxjs.throwError(processError(err.xhr, err))),
+        rxjs.catchError(
+            (err) => activePage
+                ? rxjs.throwError(processError(err.xhr, err))
+                : rxjs.EMPTY
+        ),
     );
 }
 
-function processError(xhr, err) {
-    const response = (function(content) {
-        let message = content;
-        try {
-            message = JSON.parse(content);
-        } catch (err) {
-            return {
-                message: Array.from(new Set(
-                    content.replace(/<[^>]*>/g, "")
-                        .replace(/\n{2,}/, "\n")
-                        .trim()
-                        .split("\n")
-                )).join(" ")
-            };
-        }
-        return message || { message: "empty response" };
-    })(xhr?.responseText || "");
+let activePage = true;
+window.addEventListener("beforeunload", function() {
+    activePage = false;
+});
 
-    const message = response.message || null;
+function parseDataUrl(url) {
+    const matches = url.match(/^data:(.*?)(;base64)?,(.*)$/);
+    if (!matches) throw new Error("Invalid Data URL");
+
+    const isBase64 = !!matches[2];
+    const data = matches[3];
+    if (isBase64) {
+        const binaryString = atob(data);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+    const decodedData = decodeURIComponent(data);
+    const encoder = new TextEncoder();
+    return encoder.encode(decodedData).buffer;
+}
+
+function processError(xhr, err) {
+    let responseText = "";
+    try {
+        responseText = xhr?.responseText;
+        // InvalidStateError: Failed to read the 'responseText' property from 'XMLHttpRequest': The value is only accessible if the object's 'responseType' is '' or 'text' (was 'arraybuffer').
+    } catch (err) {}
+
+    const message = (function(content) {
+        try {
+            return JSON.parse(content).message;
+        } catch (err) {
+            return Array.from(new Set(
+                content.replace(/<[^>]*>/g, "")
+                    .replace(/\n{2,}/, "\n")
+                    .trim()
+                    .split("\n")
+            )).join(" ");
+        }
+    })(responseText);
 
     if (window.navigator.onLine === false) {
         return new AjaxError("Connection Lost", err, "NO_INTERNET");
@@ -78,14 +121,14 @@ function processError(xhr, err) {
             err, "CONFLICT"
         );
     case 0:
-        switch (xhr?.responseText) {
+        switch (responseText) {
         case "":
             return new AjaxError(
                 "Service unavailable, if the problem persist, contact your administrator",
                 err, "INTERNAL_SERVER_ERROR"
             );
         default:
-            return new AjaxError(xhr.responseText, err, "INTERNAL_SERVER_ERROR");
+            return new AjaxError(responseText, err, "INTERNAL_SERVER_ERROR");
         }
     default:
         return new AjaxError(message || "Oups something went wrong", err);
